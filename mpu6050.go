@@ -12,62 +12,108 @@ import (
 
 const ACCEL_SENS = 16.384
 const GYRO_SENS = 16.375
-const CYCLE	= 1
+const CYCLE = 1
 
-var AcceData i2c.ThreeDData
-var GyroData i2c.ThreeDData
+var angle_xz float64
+
+func direction() int {
+	if angle_xz > 5 {
+		return 1
+	}
+	if angle_xz < -5 {
+		return -1
+	}
+	return 0
+}
 
 func ReadMpu6050(Data chan [2]i2c.ThreeDData) {
+	defer close(Data)
 	gbot := gobot.NewGobot()
-	raspi := raspi.NewRaspiAdaptor("raspi")
-	mpu6050 := i2c.NewMPU6050Driver(raspi, "mpu6050",CYCLE*time.Millisecond)
-	work := func() {
-		gobot.Every(CYCLE*time.Millisecond, func() {
+	r := raspi.NewRaspiAdaptor("raspi")
+	var pin31 = gpio.NewLedDriver(r, "led", "31")
+	var pin33 = gpio.NewLedDriver(r, "led", "33")
+	var pin35 = gpio.NewLedDriver(r, "led", "35")
+	var pin37 = gpio.NewLedDriver(r, "led", "37")
+	mpu6050 := i2c.NewMPU6050Driver(r, "mpu6050", CYCLE * time.Millisecond)
+
+	mpu6050work := func() {
+		gobot.Every(CYCLE * time.Millisecond, func() {
 			//加速度,陀螺仪角速度,温度
 			//fmt.Print("\r", mpu6050.Accelerometer, mpu6050.Gyroscope, mpu6050.Temperature)
 			Data <- [2]i2c.ThreeDData{mpu6050.Accelerometer, mpu6050.Gyroscope}
 		})
 	}
-	robot := gobot.NewRobot("mpu6050Bot",
-		[]gobot.Connection{raspi},
+
+	motorwork := func() {
+		var index int
+		pinlist := []*gpio.LedDriver{pin31, pin33, pin35, pin37}
+		defer func() {
+			for _,p := range pinlist{
+				p.Off()
+			}
+		}()
+		steptime := time.Millisecond * 75
+		gobot.Every( steptime, func() {
+			index += direction()
+			if index < 0 {
+				index += 4
+			}else if index > 3 {
+				index -= 4
+			}
+
+			pin := pinlist[index]
+			pin.On()
+			time.Sleep(steptime)
+			pin.Off()
+		})
+	}
+
+	mpu6050robot := gobot.NewRobot("mpu6050Bot",
+		[]gobot.Connection{r},
 		[]gobot.Device{mpu6050},
-		work,
+		mpu6050work,
 	)
-	gbot.AddRobot(robot)
-	defer close(Data)
+	MotorRobot := gobot.NewRobot("motorBot",
+		[]gobot.Connection{r},
+		[]gobot.Device{pin31, pin33, pin35, pin37},
+		motorwork,
+	)
+
+	gbot.AddRobot(mpu6050robot)
+	gbot.AddRobot(MotorRobot)
 	gbot.Start()
 }
 
-func main(){
+func main() {
 	Data := make(chan [2]i2c.ThreeDData)
 	//defer close(Data)
 	go ReadMpu6050(Data)
 	var ti float64
-	var sgx,sgy,sgz,ax,az,gx,gy,gz , angle_xz float64
-	for data := range Data{
-		ti+=1
+	var sgx, sgy, sgz, ax, az, gx, gy, gz float64
+	for data := range Data {
+		ti += 1
 
 		ax = float64(data[0].X)
-//		ay = float64(data[0].Y)
+		//		ay = float64(data[0].Y)
 		az = float64(data[0].Z)
-		gx = float64(data[1].X)/GYRO_SENS
-		gy = float64(data[1].Y)/GYRO_SENS
-		gz = float64(data[1].Z)/GYRO_SENS
+		gx = float64(data[1].X) / GYRO_SENS
+		gy = float64(data[1].Y) / GYRO_SENS
+		gz = float64(data[1].Z) / GYRO_SENS
 
 		sgx += gx
 		sgy += gy
 		sgz += gz
 
-		angle_xz = 0.98*(angle_xz+gy*CYCLE/1000) +0.02*math.Atan2(ax,az)*180/math.Pi
+		angle_xz = 0.98 * (angle_xz + gy * CYCLE / 1000) + 0.02 * math.Atan2(ax, az) * 180 / math.Pi
 
-//		fmt.Printf("\r%.2f  %.2f  %.2f  |  %.2f  %.2f  %.2f  |  %.2f  %.2f  %.2f  |  %d  %.2f",
-//			ax,ay,az,
-//			gx,gy,gz,
-//			sgx/ti,sgy/ti,sgz/ti,
-//			int(ti),angle_xz)
-		fmt.Printf("\r %3.2f  %3.2f  %3.2f   ",
-			math.Atan2(ax,az)*180/math.Pi,angle_xz,gy*CYCLE/1000,
-		)
+		//		fmt.Printf("\r%.2f  %.2f  %.2f  |  %.2f  %.2f  %.2f  |  %.2f  %.2f  %.2f  |  %d  %.2f",
+		//			ax,ay,az,
+		//			gx,gy,gz,
+		//			sgx/ti,sgy/ti,sgz/ti,
+		//			int(ti),angle_xz)
+		//fmt.Printf("\r %3.2f  %3.2f  %3.2f   %2d",
+		//	math.Atan2(ax, az) * 180 / math.Pi, angle_xz, gy * CYCLE / 1000,direction(),
+		//)
 	}
 }
 
